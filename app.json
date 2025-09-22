@@ -1,0 +1,90 @@
+{
+  "expo": {
+    "name": "Foodix",
+    "slug": "foodix-recipe-generator",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "foodix",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.foodix.app",
+      "infoPlist": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "foodix",
+            "CFBundleURLSchemes": ["foodix"]
+          }
+        ],
+        "LSApplicationQueriesSchemes": [
+          "instagram",
+          "tiktok",
+          "facebook",
+          "fb"
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.foodix.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "instagram.com"
+            },
+            {
+              "scheme": "https", 
+              "host": "www.instagram.com"
+            },
+            {
+              "scheme": "https",
+              "host": "tiktok.com"
+            },
+            {
+              "scheme": "https",
+              "host": "www.tiktok.com"
+            },
+            {
+              "scheme": "https",
+              "host": "facebook.com"
+            },
+            {
+              "scheme": "https",
+              "host": "www.facebook.com"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "SEND",
+          "data": [
+            {
+              "mimeType": "text/plain"
+            }
+          ],
+          "category": ["DEFAULT"]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": []
+  }
+}

@@ -1,0 +1,232 @@
+# 🍳 Patch pour ajouter les endpoints de recettes
+
+## Instructions d'installation
+
+1. **Connectez-vous à votre serveur Heroku** via l'interface web ou CLI
+2. **Ouvrez le fichier `server.js`** dans l'éditeur Heroku
+3. **Ajoutez ce code** juste avant la ligne `app.use('*', (req, res) => {`
+
+## Code à ajouter
+
+```javascript
+// 🍳 Endpoints pour les recettes
+// Ajoutés le 17 septembre 2025
+
+// 🍳 Route de génération de recette
+app.post('/generate-recipe', async (req, res) => {
+  try {
+    console.log('🍳 [RECIPE] Nouvelle demande de génération de recette');
+    const { platform, url, author, caption, thumbnail } = req.body;
+    
+    console.log('📝 [RECIPE] Données reçues:', {
+      platform,
+      url,
+      author,
+      captionLength: caption?.length || 0,
+      thumbnail: thumbnail ? 'Présent' : 'Absent'
+    });
+
+    const systemPrompt = `Tu es un expert culinaire. Génère une recette complète au format JSON strict:
+
+{
+  "id": "uuid-généré",
+  "createdAt": "2025-09-17T13:00:00.000Z",
+  "title": "Titre de la recette",
+  "summary": "Description courte et appétissante",
+  "servings": 4,
+  "time": {"prep": 15, "cook": 30, "total": 45},
+  "difficulty": "easy|medium|hard",
+  "ingredients": [{"item": "Nom de l'ingrédient", "quantity": 200, "unit": "g", "notes": null}],
+  "instructions": [{"step": 1, "text": "Description détaillée de l'étape"}],
+  "nutrition": {"calories": 350, "protein": 25, "carbs": 30, "fat": 15},
+  "proTips": ["Conseil de pro 1", "Conseil de pro 2"],
+  "source": {"platform": "instagram", "url": "URL originale", "author": "Auteur", "thumbnail": "URL de l'image"}
+}`;
+
+    const userPrompt = `Génère une recette complète à partir de ces informations:
+
+Plateforme: ${platform}
+URL: ${url}
+Auteur: ${author || 'Inconnu'}
+Description: ${caption}
+Image: ${thumbnail || 'Aucune'}
+
+Crée une recette détaillée, appétissante et facile à suivre.`;
+
+    console.log('🧠 [RECIPE] Envoi à OpenAI...');
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      max_tokens: 2000,
+      temperature: 0.7,
+    });
+
+    let recipeJson = completion.choices[0].message.content;
+    recipeJson = recipeJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    let recipe = JSON.parse(recipeJson);
+    recipe.id = require('crypto').randomUUID();
+    recipe.createdAt = new Date().toISOString();
+    
+    console.log('✅ [RECIPE] Recette générée avec succès:', {
+      id: recipe.id,
+      title: recipe.title,
+      ingredientsCount: recipe.ingredients.length,
+      instructionsCount: recipe.instructions.length
+    });
+    
+    res.json(recipe);
+
+  } catch (error) {
+    console.error('❌ [RECIPE] Erreur lors de la génération:', error);
+    
+    if (error.code === 'insufficient_quota') {
+      return res.status(402).json({ 
+        error: 'Quota OpenAI insuffisant' 
+      });
+    }
+    
+    if (error.code === 'rate_limit_exceeded') {
+      return res.status(429).json({ 
+        error: 'Limite de taux OpenAI dépassée, réessayez dans quelques instants' 
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Erreur interne du serveur',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ✨ Route de reformulation de recette
+app.post('/reformulate-recipe', async (req, res) => {
+  try {
+    console.log('✨ [REFORMULATE] Nouvelle demande de reformulation');
+    const { recipeId, reformulationType } = req.body;
+    
+    console.log('🔄 [REFORMULATE] Paramètres:', { recipeId, reformulationType });
+
+    const prompts = {
+      simplify: "Simplifie cette recette pour la rendre plus accessible aux débutants. Utilise des termes simples, réduis le nombre d'ingrédients si possible, et donne des instructions très claires.",
+      detailed: "Détaille davantage cette recette en ajoutant plus d'explications, de conseils techniques, et de variantes. Rends-la plus professionnelle et complète.",
+      professional: "Reformule cette recette dans un style de chef professionnel. Utilise un vocabulaire technique précis, des techniques avancées, et un ton expert.",
+      casual: "Reformule cette recette dans un style décontracté et amical. Utilise un langage familier, des expressions courantes, et un ton chaleureux."
+    };
+
+    const systemPrompt = `Tu es un expert culinaire qui reformule des recettes selon différents styles.
+
+Style demandé: ${reformulationType}
+Instructions: ${prompts[reformulationType]}
+
+RÈGLES:
+1. Garde la même structure JSON que la recette originale
+2. Adapte le contenu selon le style demandé
+3. Conserve toutes les informations essentielles
+4. Améliore la clarté et l'accessibilité
+5. Garde le même ID et timestamp
+
+FORMAT DE RÉPONSE: JSON strict identique à la recette originale`;
+
+    const userPrompt = `Reformule cette recette (ID: ${recipeId}) selon le style "${reformulationType}".
+
+Note: Pour cette démo, génère une recette exemple de gâteau au chocolat que tu reformuleras selon le style demandé.`;
+
+    console.log('🧠 [REFORMULATE] Envoi à OpenAI...');
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      max_tokens: 2000,
+      temperature: 0.7,
+    });
+
+    let recipeJson = completion.choices[0].message.content;
+    recipeJson = recipeJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    let recipe = JSON.parse(recipeJson);
+    recipe.id = recipeId;
+    recipe.createdAt = new Date().toISOString();
+    
+    console.log('✅ [REFORMULATE] Recette reformulée avec succès:', {
+      id: recipe.id,
+      title: recipe.title,
+      reformulationType
+    });
+    
+    res.json(recipe);
+
+  } catch (error) {
+    console.error('❌ [REFORMULATE] Erreur lors de la reformulation:', error);
+    
+    if (error.code === 'insufficient_quota') {
+      return res.status(402).json({ 
+        error: 'Quota OpenAI insuffisant' 
+      });
+    }
+    
+    if (error.code === 'rate_limit_exceeded') {
+      return res.status(429).json({ 
+        error: 'Limite de taux OpenAI dépassée, réessayez dans quelques instants' 
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Erreur interne du serveur',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 🏥 Route de test pour les recettes
+app.get('/test-recipe', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    service: 'Recipe Service',
+    endpoints: ['/generate-recipe', '/reformulate-recipe'],
+    timestamp: new Date().toISOString()
+  });
+});
+```
+
+## Après l'ajout
+
+1. **Sauvegardez** le fichier
+2. **Redémarrez** votre application Heroku
+3. **Testez** avec : `https://gaby-backend-victor2024-c7b0d533c9ca.herokuapp.com/test-recipe`
+
+## Endpoints disponibles
+
+- `POST /generate-recipe` - Génère une recette
+- `POST /reformulate-recipe` - Reformule une recette
+- `GET /test-recipe` - Test de santé
+
+## Format des requêtes
+
+### Génération de recette
+```json
+{
+  "platform": "instagram",
+  "url": "https://instagram.com/p/example",
+  "author": "Chef Example",
+  "caption": "Description de la recette",
+  "thumbnail": "https://example.com/image.jpg"
+}
+```
+
+### Reformulation de recette
+```json
+{
+  "recipeId": "uuid-de-la-recette",
+  "reformulationType": "simplify|detailed|professional|casual"
+}
+```
