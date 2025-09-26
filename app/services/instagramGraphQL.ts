@@ -1,4 +1,5 @@
 import InstagramService from './instagramService';
+import InstagramDirectService from './instagramDirectService';
 import { InstagramOEmbedResponse } from '../types/recipe';
 
 /**
@@ -10,7 +11,7 @@ export class InstagramGraphQLService {
    * Valide si une URL est un post Instagram valide
    */
   private static isValidInstagramUrl(url: string): boolean {
-    return InstagramService.isValidInstagramUrl(url);
+    return InstagramDirectService.isValidInstagramUrl(url);
   }
 
   /**
@@ -26,21 +27,32 @@ export class InstagramGraphQLService {
         throw new Error('URL Instagram invalide. Veuillez fournir un lien vers un post ou un reel Instagram public.');
       }
 
-      // Vérifier la connexion au service Instagram
-      const isServiceAvailable = await InstagramService.testConnection();
-      if (!isServiceAvailable) {
-        throw new Error('Service Instagram indisponible. Veuillez réessayer plus tard.');
-      }
+      // D'abord essayer l'extraction directe (IP du téléphone)
+      console.log('🚀 [InstagramGraphQL] Tentative d\'extraction DIRECTE via IP mobile...');
+      let caption: string;
+      
+      try {
+        caption = await InstagramDirectService.getCaption(url);
+        console.log('✅ [InstagramGraphQL] Extraction directe réussie !');
+      } catch (directError: any) {
+        console.log('⚠️ [InstagramGraphQL] Extraction directe échouée, fallback vers serveur...', directError.message);
+        
+        // Fallback vers le service serveur si l'extraction directe échoue
+        const isServiceAvailable = await InstagramService.testConnection();
+        if (!isServiceAvailable) {
+          throw new Error('Service Instagram indisponible et extraction directe échouée. Veuillez réessayer plus tard.');
+        }
 
-      // Extraire la légende via le service Instagram
-      const caption = await InstagramService.getCaption(url);
+        caption = await InstagramService.getCaption(url);
+        console.log('✅ [InstagramGraphQL] Extraction via serveur réussie !');
+      }
       
       if (!caption || caption.trim().length === 0) {
         throw new Error('Aucune légende trouvée pour ce post Instagram.');
       }
 
       // Extraire le shortcode pour construire les données
-      const shortcode = InstagramService.extractShortcode(url);
+      const shortcode = InstagramDirectService.extractShortcode(url);
       if (!shortcode) {
         throw new Error('Impossible d\'extraire l\'identifiant du post.');
       }
@@ -210,6 +222,13 @@ export class InstagramGraphQLService {
    */
   static async checkServiceStatus(): Promise<boolean> {
     try {
+      // Test de l'extraction directe en priorité
+      const directStatus = await InstagramDirectService.testConnection();
+      if (directStatus) {
+        return true;
+      }
+      
+      // Fallback vers le service serveur
       return await InstagramService.testConnection();
     } catch (error) {
       console.error('Erreur de vérification du service Instagram:', error);

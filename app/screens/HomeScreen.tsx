@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,8 @@ import Toast from 'react-native-toast-message';
 import { useRecipesStore } from '../store/useRecipesStore';
 import { fetchInstagramOEmbed } from '../services/oembed';
 import { fetchInstagramData } from '../services/instagramGraphQL';
-import { generateRecipe } from '../services/api';
+import { generateRecipe, createRecipeJob } from '../services/api';
+import { NotificationService } from '../services/notifications';
 import { RecipeGenerationPayload } from '../types/recipe';
 import { colors, spacing, borderRadius, typography, shadows } from '../theme/gluestack-theme';
 import { processSharedLink } from '../services/sharing';
@@ -31,10 +32,13 @@ export default function HomeScreen() {
   const navigation = useNavigation();
   const [url, setUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [oEmbedData, setOEmbedData] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [loadingStep, setLoadingStep] = useState(1);
   const [generatedRecipeId, setGeneratedRecipeId] = useState<string | null>(null);
+  const [activeJobs, setActiveJobs] = useState<string[]>([]);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const addRecipe = useRecipesStore((state) => state.addRecipe);
 
   // Fonction pour pré-remplir l'URL (appelée depuis App.tsx)
@@ -77,85 +81,96 @@ export default function HomeScreen() {
     return instagramRegex.test(url);
   };
 
-  // Traiter l'input (URL ou description)
-  const processInput = async () => {
-    console.log('🚀 [HomeScreen] Début du processus de génération de recette');
-    console.log('📝 [HomeScreen] URL/Description saisie:', url.trim());
+  // Fonction pour charger automatiquement l'aperçu Instagram
+  const loadInstagramPreview = useCallback(async (instagramUrl: string) => {
+    console.log('🔄 [HomeScreen] Chargement automatique de l\'aperçu pour:', instagramUrl);
     
-    if (!url.trim()) {
-      console.log('❌ [HomeScreen] Erreur: URL/description vide');
-      Toast.show({
-        type: 'error',
-        text1: 'Erreur',
-        text2: 'Veuillez saisir une URL Instagram ou une description de recette',
-      });
-      return;
-    }
-
-    console.log('⏳ [HomeScreen] Démarrage du chargement...');
-    setIsLoading(true);
+    setIsLoadingPreview(true);
+    setPreviewError(null);
+    setShowPreview(false);
+    setOEmbedData(null);
     
     try {
-      // Vérifier si c'est une URL Instagram
-      const isInstagramUrl = isValidInstagramUrl(url.trim());
-      console.log('🔍 [HomeScreen] Type d\'input détecté:', isInstagramUrl ? 'URL Instagram' : 'Description de recette');
-      
-      if (isInstagramUrl) {
-        console.log('📱 [HomeScreen] Cas 1: URL Instagram détectée, récupération des données...');
-        
-        try {
-          // Essayer d'abord le service Instagram GraphQL (nouveau)
-          console.log('🆕 [HomeScreen] Tentative avec le service Instagram GraphQL...');
-          const instagramData = await fetchInstagramData(url.trim());
-          console.log('✅ [HomeScreen] Données Instagram récupérées via GraphQL:', {
-            title: instagramData.title,
-            author: instagramData.author_name,
-            captionLength: instagramData.caption?.length || 0
-          });
-          
-          setOEmbedData(instagramData);
-          setShowPreview(true);
-          console.log('👀 [HomeScreen] Aperçu affiché, en attente de confirmation utilisateur');
-          
-          Toast.show({
-            type: 'success',
-            text1: 'Aperçu chargé',
-            text2: 'Les données du post Instagram ont été extraites.',
-          });
-        } catch (graphqlError) {
-          console.log('⚠️ [HomeScreen] Service GraphQL échoué, fallback vers oEmbed...', graphqlError.message);
-          
-          // Fallback vers oEmbed si le service GraphQL échoue
-          const oEmbedResponse = await fetchInstagramOEmbed(url.trim());
-          console.log('✅ [HomeScreen] Données oEmbed récupérées (fallback):', {
-            title: oEmbedResponse.title,
-            author: oEmbedResponse.author_name,
-            thumbnail: oEmbedResponse.thumbnail_url ? 'Présent' : 'Absent'
-          });
-          
-          setOEmbedData(oEmbedResponse);
-          setShowPreview(true);
-          console.log('👀 [HomeScreen] Aperçu affiché (fallback), en attente de confirmation utilisateur');
-          
-          Toast.show({
-            type: 'success',
-            text1: 'Aperçu chargé',
-            text2: 'Les données du post Instagram ont été extraites (mode fallback).',
-          });
-        }
-      } else {
-        console.log('📝 [HomeScreen] Cas 2: Description de recette, génération directe...');
-        // Cas 2: Description de recette - générer directement la recette
-        await generateRecipeFromDescription(url.trim());
-      }
-    } catch (err: any) {
-      console.error('❌ [HomeScreen] Erreur lors du traitement:', err);
-      console.error('📊 [HomeScreen] Détails de l\'erreur:', {
-        message: err.message,
-        stack: err.stack,
-        name: err.name
+      // Essayer d'abord le service Instagram GraphQL
+      console.log('🆕 [HomeScreen] Tentative avec le service Instagram GraphQL...');
+      const instagramData = await fetchInstagramData(instagramUrl);
+      console.log('✅ [HomeScreen] Données Instagram récupérées via GraphQL:', {
+        title: instagramData.title,
+        author: instagramData.author_name,
+        captionLength: (instagramData as any).caption?.length || 0
       });
       
+      setOEmbedData(instagramData);
+      setShowPreview(true);
+      
+      Toast.show({
+        type: 'success',
+        text1: 'Aperçu chargé',
+        text2: 'Les données du post Instagram ont été extraites.',
+      });
+    } catch (graphqlError: any) {
+      console.log('⚠️ [HomeScreen] Service GraphQL échoué, fallback vers oEmbed...', graphqlError.message);
+      
+      try {
+        // Fallback vers oEmbed si le service GraphQL échoue
+        const oEmbedResponse = await fetchInstagramOEmbed(instagramUrl);
+        console.log('✅ [HomeScreen] Données oEmbed récupérées (fallback):', {
+          title: oEmbedResponse.title,
+          author: oEmbedResponse.author_name,
+          thumbnail: oEmbedResponse.thumbnail_url ? 'Présent' : 'Absent'
+        });
+        
+        setOEmbedData(oEmbedResponse);
+        setShowPreview(true);
+        
+        Toast.show({
+          type: 'success',
+          text1: 'Aperçu chargé',
+          text2: 'Les données du post Instagram ont été extraites (mode fallback).',
+        });
+      } catch (oembedError: any) {
+        console.error('❌ [HomeScreen] Erreur lors du chargement de l\'aperçu:', oembedError);
+        setPreviewError('Impossible de charger l\'aperçu de ce post Instagram.');
+      }
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  }, []);
+
+  // Debounce pour l'aperçu automatique
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmedUrl = url.trim();
+      
+      if (trimmedUrl && isValidInstagramUrl(trimmedUrl)) {
+        loadInstagramPreview(trimmedUrl);
+      } else {
+        // Réinitialiser l'aperçu si l'URL n'est plus valide
+        setShowPreview(false);
+        setOEmbedData(null);
+        setPreviewError(null);
+      }
+    }, 500); // Attendre 500ms après la dernière modification
+    
+    return () => clearTimeout(timer);
+  }, [url, loadInstagramPreview]);
+
+  // Gérer le changement d'URL
+  const handleUrlChange = (newUrl: string) => {
+    setUrl(newUrl);
+    // Le useEffect ci-dessus se charge du reste
+  };
+
+  // Générer une recette à partir d'une description de texte (pour les descriptions non-Instagram)
+  const processTextDescription = async (description: string) => {
+    console.log('📝 [HomeScreen] Génération de recette à partir de description');
+    console.log('📄 [HomeScreen] Description:', description);
+    
+    setIsLoading(true);
+    try {
+      await generateRecipeFromDescription(description);
+    } catch (err: any) {
+      console.error('❌ [HomeScreen] Erreur lors du traitement:', err);
       Alert.alert('Erreur', err.message || 'Impossible de traiter votre demande.');
       Toast.show({
         type: 'error',
@@ -163,7 +178,6 @@ export default function HomeScreen() {
         text2: err.message || 'Veuillez réessayer.',
       });
     } finally {
-      console.log('🏁 [HomeScreen] Fin du processus, arrêt du chargement');
       setIsLoading(false);
     }
   };
@@ -194,9 +208,9 @@ export default function HomeScreen() {
         thumbnail: payload.thumbnail
       });
 
-      // Étape 2: Génération IA
+      // Étape 2: Génération IA (bloquante pour les descriptions texte)
       setLoadingStep(2);
-      console.log('🌐 [HomeScreen] Appel de l\'API generateRecipe...');
+      console.log('🌐 [HomeScreen] Appel de l\'API generateRecipe (description texte)...');
       
       // Lancer l'API en parallèle avec un timer pour les étapes
       const apiPromise = generateRecipe(payload);
@@ -302,19 +316,19 @@ export default function HomeScreen() {
 
       console.log('🔍 [HomeScreen] Légende complète nettoyée:', payload.caption);
 
-      console.log('🌐 [HomeScreen] Appel de l\'API generateRecipe...');
-      const recipe = await generateRecipe(payload);
-      console.log('✅ [HomeScreen] Recette générée avec succès:', {
-        id: recipe.id,
-        title: recipe.title,
-        ingredientsCount: recipe.ingredients.length,
-        instructionsCount: recipe.instructions.length
+      console.log('🌐 [HomeScreen] Appel de l\'API createRecipeJob...');
+      const jobResult = await createRecipeJob(payload);
+      console.log('✅ [HomeScreen] Job créé avec succès:', {
+        job_id: jobResult.job_id
       });
 
-      console.log('💾 [HomeScreen] Ajout de la recette au store...');
-      addRecipe(recipe);
-      console.log('✅ [HomeScreen] Recette ajoutée au store');
+      // Ajouter le job à la liste des jobs actifs et démarrer le polling
+      const newActiveJobs = [...activeJobs, jobResult.job_id];
+      setActiveJobs(newActiveJobs);
       
+      // Démarrer le polling pour ce job
+      NotificationService.startJobPolling([jobResult.job_id], 10000); // Vérifier toutes les 10 secondes
+
       console.log('🧹 [HomeScreen] Nettoyage de l\'état...');
       setShowPreview(false);
       setUrl('');
@@ -323,14 +337,11 @@ export default function HomeScreen() {
       
       Toast.show({
         type: 'success',
-        text1: 'Recette générée !',
-        text2: 'La recette a été ajoutée à votre collection',
+        text1: 'Recette en préparation !',
+        text2: 'Vous serez notifié(e) quand elle sera prête',
       });
 
-      console.log('🧭 [HomeScreen] Navigation vers RecipeDetail avec ID:', recipe.id);
-      // Naviguer vers les détails de la recette
-      (navigation as any).navigate('RecipeDetail', { recipeId: recipe.id });
-      console.log('🏁 [HomeScreen] Processus de génération terminé avec succès');
+      console.log('🏁 [HomeScreen] Processus de création de job terminé avec succès');
       
     } catch (error) {
       console.error('❌ [HomeScreen] Erreur lors de la génération de recette:', error);
@@ -426,7 +437,7 @@ export default function HomeScreen() {
                 'Servez immédiatement pour éviter que les œufs coagulent'
               ],
               source: { 
-                platform: 'instagram', 
+                platform: 'instagram' as const, 
                 url: 'https://instagram.com/test', 
                 author: 'Chef Italiano', 
                 thumbnail: 'https://images.unsplash.com/photo-1551183053-bf91a1d81141?w=400'
@@ -473,10 +484,10 @@ export default function HomeScreen() {
               placeholder="Collez un lien Instagram ou décrivez votre recette..."
               placeholderTextColor={colors.gray[400]}
               value={url}
-              onChangeText={setUrl}
+              onChangeText={handleUrlChange}
               autoCapitalize="none"
               autoCorrect={false}
-              editable={!isLoading}
+              editable={!isLoading && !isLoadingPreview}
               multiline={true}
               numberOfLines={3}
               textAlignVertical="top"
@@ -496,25 +507,20 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Generate Recipe Button avec style moderne */}
-        <TouchableOpacity
-          style={[
-            styles.generateButton,
-            url.trim() && styles.generateButtonActive,
-            isLoading && styles.generateButtonDisabled
-          ]}
-          onPress={processInput}
-          disabled={isLoading || !url.trim()}
-        >
-          <Text style={[styles.sparkleIcon, url.trim() && { color: colors.white }]}>✨</Text>
-          <Text style={[
-            styles.generateButtonText,
-            url.trim() && styles.generateButtonTextActive
-          ]}>
-            {isLoading ? 'Génération...' : 'Créer la recette'}
-          </Text>
-          <Text style={[styles.sparkleIcon, url.trim() && { color: colors.white }]}>✨</Text>
-        </TouchableOpacity>
+        {/* Indicateur de chargement de l'aperçu */}
+        {isLoadingPreview && (
+          <View style={styles.previewLoadingContainer}>
+            <ActivityIndicator size="small" color={colors.primary[700]} />
+            <Text style={styles.previewLoadingText}>Chargement de l'aperçu...</Text>
+          </View>
+        )}
+
+        {/* Message d'erreur d'aperçu */}
+        {previewError && (
+          <View style={styles.previewErrorContainer}>
+            <Text style={styles.previewErrorText}>⚠️ {previewError}</Text>
+          </View>
+        )}
 
         {/* Social Media Buttons avec style moderne */}
         <View style={styles.socialSection}>
@@ -551,7 +557,7 @@ export default function HomeScreen() {
             <View style={styles.previewContent}>
               <Image
                 source={{ uri: oEmbedData.thumbnail_url }}
-                style={styles.previewImage}
+                style={styles.previewImage as any}
                 resizeMode="cover"
               />
               <View style={styles.previewText}>
@@ -626,7 +632,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: typography.sizes['4xl'],
-    fontWeight: typography.weights.bold,
+    fontWeight: 'bold' as const,
     color: colors.black,
     marginBottom: spacing.xs,
     textAlign: 'center',
@@ -635,7 +641,7 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.md,
     color: colors.gray[600],
     textAlign: 'center',
-    fontWeight: typography.weights.normal,
+    fontWeight: 'normal' as const,
     marginBottom: spacing.md,
   },
   // Icône container
@@ -667,7 +673,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: typography.sizes.md,
     color: colors.black,
-    fontWeight: typography.weights.medium,
+    fontWeight: '500' as const,
     paddingVertical: spacing.md,
     minHeight: 80,
     maxHeight: 120,
@@ -701,38 +707,40 @@ const styles = StyleSheet.create({
   infoIcon: {
     color: colors.gray[500],
     fontSize: 12,
-    fontWeight: typography.weights.bold,
+    fontWeight: 'bold' as const,
   },
-  // Generate button moderne
-  generateButton: {
-    backgroundColor: colors.gray[100],
-    borderRadius: borderRadius.lg,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg,
+  // Indicateurs de chargement et d'erreur d'aperçu
+  previewLoadingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    ...shadows.card,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
     marginBottom: spacing.lg,
+    ...shadows.card,
   },
-  generateButtonActive: {
-    backgroundColor: colors.primary[700],
-  },
-  generateButtonDisabled: {
-    backgroundColor: colors.gray[200],
-  },
-  sparkleIcon: {
-    fontSize: 18,
-    color: colors.primary[700],
-    marginHorizontal: spacing.sm,
-  },
-  generateButtonText: {
-    fontSize: typography.sizes.md,
-    fontWeight: typography.weights.semibold,
+  previewLoadingText: {
+    fontSize: typography.sizes.sm,
     color: colors.gray[600],
+    marginLeft: spacing.sm,
+    fontWeight: '500' as const,
   },
-  generateButtonTextActive: {
-    color: colors.white,
+  previewErrorContainer: {
+    backgroundColor: colors.gray[100],
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.accent.red,
+  },
+  previewErrorText: {
+    fontSize: typography.sizes.sm,
+    color: colors.accent.red,
+    textAlign: 'center',
+    fontWeight: '500' as const,
   },
   // Social media buttons modernes
   socialSection: {
@@ -765,7 +773,7 @@ const styles = StyleSheet.create({
   },
   socialText: {
     fontSize: typography.sizes.sm,
-    fontWeight: typography.weights.semibold,
+    fontWeight: '600' as const,
     color: colors.black,
   },
   // Preview card moderne
@@ -784,7 +792,7 @@ const styles = StyleSheet.create({
   },
   previewTitle: {
     fontSize: typography.sizes.lg,
-    fontWeight: typography.weights.bold,
+    fontWeight: 'bold' as const,
     color: colors.black,
   },
   closeButton: {
@@ -796,7 +804,7 @@ const styles = StyleSheet.create({
   closeButtonText: {
     fontSize: typography.sizes.sm,
     color: colors.gray[600],
-    fontWeight: typography.weights.medium,
+    fontWeight: '500' as const,
   },
   previewContent: {
     flexDirection: 'row',
@@ -815,7 +823,7 @@ const styles = StyleSheet.create({
   },
   previewCaption: {
     fontSize: typography.sizes.md,
-    fontWeight: typography.weights.semibold,
+    fontWeight: '600' as const,
     color: colors.black,
     marginBottom: spacing.xs,
   },
@@ -832,14 +840,14 @@ const styles = StyleSheet.create({
   generateRecipeButtonText: {
     color: colors.white,
     fontSize: typography.sizes.md,
-    fontWeight: typography.weights.bold,
+    fontWeight: 'bold' as const,
   },
   // Footer text moderne
   footerText: {
     textAlign: 'center',
     fontSize: typography.sizes.sm,
     color: colors.gray[500],
-    fontWeight: typography.weights.medium,
+    fontWeight: '500' as const,
     marginTop: spacing.lg,
     marginBottom: spacing.xl,
   },
